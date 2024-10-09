@@ -18,10 +18,9 @@ class Yolov8Node:
 
         # params
         self.model_type = rospy.get_param("~model_type", "YOLO")
-        self.model = rospy.get_param("~model", "/home/teammiracle/ROS/yolo_ws/src/yolov8_ros/src/best2.pt")
+        self.model = rospy.get_param("~model", "/home/teammiracle/ROS/yolo_ws/src/yolov8_ros/src/best5.pt")
         self.device = rospy.get_param("~device", "cuda:0")
         self.threshold = rospy.get_param("~threshold", 0.5)
-        self.enable = rospy.get_param("~enable", True)
         self.view_image = rospy.get_param("~view_image", True)
         self.publish_image = rospy.get_param("~publish_image", False)
 
@@ -101,82 +100,86 @@ class Yolov8Node:
         return boxes_list
 
     def image_cb(self, msg):
-        if self.enable:
-            # convert image + predict
-            if self.compressed_input:
-                cv_image = self.cv_bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
-            else:
-                cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-            cv_image = cv_image.copy()  # Make a writable copy of the image
-            results = self.yolo.predict(
-                source=cv_image,
-                verbose=False,
-                stream=False,
-                conf=self.threshold,
-                device=self.device
-            )
-            results = results[0].cpu()
-            hypothesis = self.parse_hypothesis(results) if results.boxes else []
-            boxes = self.parse_boxes(results) if results.boxes else []
+        # convert image + predict
+        if self.compressed_input:
+            cv_image = self.cv_bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        else:
+            cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
-            # create detection msgs
-            detections_msg = BoundingBoxes()
+        # Check if the image is in Bayer format and debayer it
+        if cv_image is not None and len(cv_image.shape) == 2:  # Bayer images are single-channel
+            cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BAYER_BG2BGR)  # Adjust the Bayer pattern as needed
 
-            for i in range(len(hypothesis)):
-                aux_msg = BoundingBox()
+        cv_image = cv_image.copy()  # Make a writable copy of the image
+        results = self.yolo.predict(
+            source=cv_image,
+            verbose=False,
+            stream=False,
+            conf=self.threshold,
+            device=self.device
+        )
+        results = results[0].cpu()
+        hypothesis = self.parse_hypothesis(results) if results.boxes else []
+        boxes = self.parse_boxes(results) if results.boxes else []
 
-                if results.boxes and hypothesis and boxes:
-                    aux_msg.Class = hypothesis[i]["class_name"]
-                    aux_msg.probability = hypothesis[i]["score"]
-                    aux_msg.xmin = boxes[i].xmin
-                    aux_msg.ymin = boxes[i].ymin
-                    aux_msg.xmax = boxes[i].xmax
-                    aux_msg.ymax = boxes[i].ymax
+        # create detection msgs
+        detections_msg = BoundingBoxes()
 
-                    # Get color for the class
-                    color = self.colors[hypothesis[i]["class_id"] % len(self.colors)]
+        for i in range(len(hypothesis)):
+            aux_msg = BoundingBox()
 
-                    # Draw bounding box on the image
-                    cv2.rectangle(cv_image, (aux_msg.xmin, aux_msg.ymin), (aux_msg.xmax, aux_msg.ymax), color, 2)
-                    label = f"{aux_msg.Class} {aux_msg.probability:.2f}"
+            if results.boxes and hypothesis and boxes:
+                aux_msg.Class = hypothesis[i]["class_name"]
+                aux_msg.probability = hypothesis[i]["score"]
+                aux_msg.xmin = boxes[i].xmin
+                aux_msg.ymin = boxes[i].ymin
+                aux_msg.xmax = boxes[i].xmax
+                aux_msg.ymax = boxes[i].ymax
 
-                    # Calculate text size and position
-                    (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
-                    text_x = aux_msg.xmin
-                    text_y = aux_msg.ymin - 10 if aux_msg.ymin - 10 > 10 else aux_msg.ymin + 10
+                # Get color for the class
+                color = self.colors[hypothesis[i]["class_id"] % len(self.colors)]
 
-                    # Draw background rectangle for text
-                    cv2.rectangle(cv_image, (text_x, text_y - text_height - baseline), (text_x + text_width, text_y + baseline), color, cv2.FILLED)
+                # Draw bounding box on the image
+                cv2.rectangle(cv_image, (aux_msg.xmin, aux_msg.ymin), (aux_msg.xmax, aux_msg.ymax), color, 2)
+                label = f"{aux_msg.Class} {aux_msg.probability:.2f}"
 
-                    # Calculate brightness of the color
-                    brightness = np.mean(color)
+                # Calculate text size and position
+                (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+                text_x = aux_msg.xmin
+                text_y = aux_msg.ymin - 10 if aux_msg.ymin - 10 > 10 else aux_msg.ymin + 10
 
-                    # Choose text color based on brightness
-                    text_color = (255, 255, 255) if brightness < 128 else (0, 0, 0)
+                # Draw background rectangle for text
+                cv2.rectangle(cv_image, (text_x, text_y - text_height - baseline), (text_x + text_width, text_y + baseline), color, cv2.FILLED)
 
-                    # Draw text on top of the rectangle
-                    cv2.putText(cv_image, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, text_color, 2)
+                # Calculate brightness of the color
+                brightness = np.mean(color)
 
-                detections_msg.bounding_boxes.append(aux_msg)
+                # Choose text color based on brightness
+                text_color = (255, 255, 255) if brightness < 128 else (0, 0, 0)
 
-            # publish detections
-            detections_msg.header = msg.header
-            self._pub.publish(detections_msg)
+                # Draw text on top of the rectangle
+                cv2.putText(cv_image, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, text_color, 2)
 
-            # Publish annotated image
-            if self.publish_image:
-                annotated_image_msg = self.cv_bridge.cv2_to_imgmsg(cv_image, "bgr8")
-                annotated_image_msg.header = msg.header
-                self.image_pub.publish(annotated_image_msg)
+            detections_msg.bounding_boxes.append(aux_msg)
 
-            # Display image
-            if self.view_image:
-                cv_image_resized = cv2.resize(cv_image, (1280, 720))  # Resize for better visualization
-                cv2.imshow("Detection", cv_image_resized)
-                cv2.waitKey(1)
+        # publish detections
+        detections_msg.header = msg.header
+        self._pub.publish(detections_msg)
 
-            del results
-            del cv_image
+        # Publish annotated image
+        if self.publish_image:
+            annotated_image_msg = self.cv_bridge.cv2_to_imgmsg(cv_image, "bgr8")
+            annotated_image_msg.header = msg.header
+            self.image_pub.publish(annotated_image_msg)
+
+        # Display image
+        if self.view_image:
+            cv_image_resized = cv2.resize(cv_image, (1280, 720))  # Resize for better visualization
+            cv2.imshow("Detection", cv_image_resized)
+            cv2.waitKey(1)
+
+        del results
+        del cv_image
 
 def main():
     node = Yolov8Node()

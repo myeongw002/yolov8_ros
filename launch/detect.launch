@@ -3,13 +3,14 @@
     <node name="yolov8_node" pkg="yolov8_ros" type="detect.py" output="screen">
         <!-- Parameters -->
         <param name="model_type" value="YOLO"/>
-        <param name="model" value="$(find yolov8_ros)/models/best8.pt"/>
+        <param name="model" value="$(find yolov8_ros)/models/best6.pt"/>
         <param name="device" value="cuda:0"/>
         <param name="threshold" value="0.8"/>
         <param name="view_image" value="true"/>
-        <param name="publish_image" value="false"/>
-        <param name="input_image_topic" value="/pylon_camera_node/image_raw/compressed"/>
-        <param name="output_topic" value="/yolo_detections"/>
+        <param name="publish_image" value="true"/>
+        <param name="input_image_topic" value="/pylon_camera_node2/image_raw/compressed"/>
+        <param name="output_topic" value="/yolov8/detections"/>
         <param name="annotated_image_topic" value="/annotated_image"/>
     </node>
+    
 </launch>

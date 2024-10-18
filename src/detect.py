@@ -23,6 +23,7 @@ class Yolov8Node:
         self.threshold = rospy.get_param("~threshold", 0.5)
         self.view_image = rospy.get_param("~view_image", True)
         self.publish_image = rospy.get_param("~publish_image", False)
+        self.output_topic = rospy.get_param("~output_topic", "/yolov8/detections")
 
         self.type_to_model = {
             "YOLO": YOLO,
@@ -34,7 +35,7 @@ class Yolov8Node:
 
         self.cv_bridge = CvBridge()
 
-        self._pub = rospy.Publisher("yolo_detections", BoundingBoxes, queue_size=10)
+        self._pub = rospy.Publisher(self.output_topic, BoundingBoxes, queue_size=1)
 
         # Initialize subscriber to Image/CompressedImage topic
         input_image_type, input_image_topic, _ = get_topic_type(rospy.get_param("~input_image_topic"), blocking=True)
@@ -50,13 +51,15 @@ class Yolov8Node:
             )
 
         if self.publish_image:
-            self.image_pub = rospy.Publisher("annotated_image", Image, queue_size=10)
+            self.image_pub = rospy.Publisher("annotated_image", Image, queue_size=1)
 
         # Create a color map for classes using provided hex colors
         hex_colors = ('FF3838', 'FF9D97', 'FF701F', 'FFB21D', 'CFD231', '48F90A', '92CC17', '3DDB86', '1A9334', '00D4BB',
                       '2C99A8', '00C2FF', '344593', '6473FF', '0018EC', '8438FF', '520085', 'CB38FF', 'FF95C8', 'FF37C7')
         self.colors = self.hex_to_bgr(hex_colors)
         random.shuffle(self.colors)  # Shuffle the colors to assign them randomly
+
+        self.cv_image = None
 
     def hex_to_bgr(self, hex_colors):
         bgr_colors = []
@@ -101,6 +104,7 @@ class Yolov8Node:
 
     def image_cb(self, msg):
         # convert image + predict
+        #rospy.loginfo("Received image")
         if self.compressed_input:
             cv_image = self.cv_bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
         else:
@@ -108,9 +112,18 @@ class Yolov8Node:
 
         # Check if the image is in Bayer format and debayer it
         if cv_image is not None and len(cv_image.shape) == 2:  # Bayer images are single-channel
-            cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BAYER_BG2BGR)  # Adjust the Bayer pattern as needed
+            self.cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BAYER_BG2BGR)  # Adjust the Bayer pattern as needed
+            #rospy.loginfo("Debayered image")
+        else:
+            self.cv_image = cv_image
+        self.header = msg.header
 
-        cv_image = cv_image.copy()  # Make a writable copy of the image
+
+    def detect(self):
+        if self.cv_image is None:
+            return
+        cv_image = self.cv_image.copy()  # Make a writable copy of the image
+        #rospy.loginfo(cv_image.shape)
         results = self.yolo.predict(
             source=cv_image,
             verbose=False,
@@ -163,13 +176,13 @@ class Yolov8Node:
             detections_msg.bounding_boxes.append(aux_msg)
 
         # publish detections
-        detections_msg.header = msg.header
+        detections_msg.header = self.header 
         self._pub.publish(detections_msg)
 
         # Publish annotated image
         if self.publish_image:
             annotated_image_msg = self.cv_bridge.cv2_to_imgmsg(cv_image, "bgr8")
-            annotated_image_msg.header = msg.header
+            annotated_image_msg.header = self.header 
             self.image_pub.publish(annotated_image_msg)
 
         # Display image
@@ -183,7 +196,16 @@ class Yolov8Node:
 
 def main():
     node = Yolov8Node()
-    rospy.spin()
+    rate = rospy.Rate(30)
+
+    while not rospy.is_shutdown():
+        node.detect()
+        try:
+            rate.sleep()
+        except rospy.exceptions.ROSTimeMovedBackwardsException:
+            rospy.logwarn("ROS time moved backwards. Time adjustment detected.")
+            continue
+
 
 if __name__ == '__main__':
     main()
